@@ -1,6 +1,7 @@
 <?php
 require "connectdb.php";
 include "Maala.php";
+require "priorityqueue.php";
 $idx_courses = 0;
 $idx_rooms = 1;
 $idx_schedual = 2;
@@ -17,13 +18,16 @@ $sql_std = "SELECT * from affairs_reg_std";
 $sql_arr = [$sql_courses, $sql_rooms, $sql_schedual, $sql_period, $sql_std_courses, $sql_std];
 $cross_prob = mt_rand() / mt_getrandmax(); // used in GA CrossOver function
 $mutation_prob = mt_rand() / mt_getrandmax(); // used in GA Mutation function
-// used in implementation , here just declaring for clarity 
+// used in implementation , here just declaring for clarity
 $query_arr = [];
 $course_schid = [];
 $arr_std_courses = [];
 $arr_pr = [];
 $arr_sch = [];
+$arr_rooms = [];
 $course_cap = [];
+$room_cap = [];
+$RoomsCapSum = 0 ;
 // execute the queries above
 for ($i = 0; $i < count($sql_arr); $i++) {
     $q = mysqli_query($con, $sql_arr[$i]);
@@ -36,16 +40,20 @@ $query_std_courses_temp = $query_arr[$idx_std_courses];
 while ($row = mysqli_fetch_assoc($query_std_courses_temp)) {
     $std_id = $row["std_id"];
     $cr_id = $row["course_id"];
-    if( !isset($arr_std_courses[$std_id]) ) $arr_std_courses[$std_id] = [] ;
+    if (!isset($arr_std_courses[$std_id])) {
+        $arr_std_courses[$std_id] = [];
+    }
+
     array_push($arr_std_courses[$std_id], $cr_id);
 }
 
-// put queries in variables to make it easier to deal with it in the code  
+// put queries in variables to make it easier to deal with it in the code
 $courses = $query_arr[$idx_courses];
 $scheduals = $query_arr[$idx_schedual];
 $periods = $query_arr[$idx_period];
+$rooms = $query_arr[$idx_rooms];
 
-// seek cursors to the beginning of the queries (just to avoid re-query and consuming time )  
+// seek cursors to the beginning of the queries (just to avoid re-query and consuming time )
 mysqli_data_seek($courses, 0);
 mysqli_data_seek($scheduals, 0);
 mysqli_data_seek($periods, 0);
@@ -53,18 +61,32 @@ mysqli_data_seek($periods, 0);
 $courses_cnt = mysqli_num_rows($courses);
 $periods_cnt = mysqli_num_rows($periods);
 $sch_cnt = mysqli_num_rows($scheduals);
+
 // put the scheduals IDs in arr_sch array
 while ($row = mysqli_fetch_assoc($scheduals)) {
     array_push($arr_sch, $row["id"]);
 }
+
 // put the periods IDs in arr_pr array
 while ($row = mysqli_fetch_assoc($periods)) {
     array_push($arr_pr, $row["id"]);
 }
+
+// put the periods IDs in arr_pr array
+while ($row = mysqli_fetch_assoc($rooms)) {
+    array_push($arr_rooms, $row["room_id"]);
+    $room_cap[$row["room_id"]] = $row["capacity"];
+    $RoomsCapSum+=$room_cap[$row["room_id"]] ;
+}
+
 // mapping course's id to it's capacity
 while ($row = mysqli_fetch_assoc($courses)) {
     $course_cap[$row["id"]] = $row["course_cp"];
 }
+
+mysqli_data_seek($courses, 0);
+mysqli_data_seek($scheduals, 0);
+mysqli_data_seek($periods, 0);
 //------------------------------------------------------- GA code
 
 class chromo_typ
@@ -73,13 +95,13 @@ class chromo_typ
     public $arr_PrId = [];
     public $fitness;
 }
-$population = []; // size = 10 
-$population_sz = 10 ;
+$population = []; // size = 10
+$population_sz = 10;
 // generate our initial random population
 for ($temp = 1; $temp <= 10; $temp++) {
     $chrom = new chromo_typ();
     // give each course a period id and schedual id
-    for ($i = 1; $i <= $courses_cnt; $i++) {
+    foreach ($arr_sch as $i) {
         $sch_id = $arr_sch[rand(0, $sch_cnt - 1)]; // random from periods IDs array
         $pr_id = $arr_pr[rand(0, $periods_cnt - 1)]; // random from scheduals IDs array
         $chrom->arr_SchId[$i] = $sch_id;
@@ -89,11 +111,12 @@ for ($temp = 1; $temp <= 10; $temp++) {
     array_push($population, $chrom);
 } // end for temp <= 10
 
-// parameters : two chromosomes , return value :  chromosome which is the result of crossover 
-function CrossOver($chrom1, $chrom2) 
+// parameters : two chromosomes , return value :  chromosome which is the result of crossover
+function CrossOver($chrom1, $chrom2)
 {
+    global $arr_sch;
     global $courses_cnt, $cross_prob;
-    for ($i = 1; $i <= $courses_cnt; $i++) {
+    foreach ($arr_sch as $i) {
         $r = mt_rand() / mt_getrandmax();
         // swap depinding on cross prob
         if ($r <= $cross_prob) {
@@ -106,7 +129,7 @@ function CrossOver($chrom1, $chrom2)
 /*
 parameters : chromosome to be mutate , passed by reference
 returned value : NONE
-*/
+ */
 function Mutation(&$chrom)
 {
     global $population, $courses_cnt, $arr_sch, $arr_pr, $sch_cnt, $periods_cnt, $mutation_prob;
@@ -125,7 +148,7 @@ function Mutation(&$chrom)
 function calc_fitness($chrom)
 {
     $fitness = 0;
-    global $query_arr, $idx_std, $arr_std_courses, $population;
+    global $query_arr, $idx_std, $arr_std_courses, $population , $course_cap , $RoomsCapSum ;
     $query_std_temp = $query_arr[$idx_std];
     mysqli_data_seek($query_std_temp, 0);
     while ($row = mysqli_fetch_assoc($query_std_temp)) {
@@ -133,20 +156,19 @@ function calc_fitness($chrom)
         $conflict = 0;
         $arr_curstd_courses = $arr_std_courses[$std_id]; // array contain the current stdudent courses
         $arr_counting_temp = []; // counting conflicts
+        $arr_ComputingSum = [];
         foreach ($arr_curstd_courses as $e) {
             $sch_id = $chrom->arr_SchId[$e];
             $pr_id = $chrom->arr_PrId[$e];
             $index = ((string) ($sch_id)) . '_' . ((string) ($pr_id));
-            $arr_counting_temp[$index] = 0;
-        }
-        foreach ($arr_curstd_courses as $e) {
-            $sch_id = $chrom->arr_SchId[$e];
-            $pr_id = $chrom->arr_PrId[$e];
-            $index = ((string) ($sch_id)) . '_' . ((string) ($pr_id));
+            if( !isset( $arr_counting_temp[$index] ) )$arr_counting_temp[$index] = 0 ;
+            if( !isset( $arr_ComputingSum[$index] ) )$arr_ComputingSum[$index] = 0 ;
             $arr_counting_temp[$index] += 1;
+            $arr_ComputingSum[$index]+=$course_cap[$e] ;
             if ($arr_counting_temp[$index] > 1) {
                 $conflict++;
             }
+            if( $arr_ComputingSum[$index] > $RoomsCapSum )return -100000 ;
         }
         $fitness -= $conflict;
     } // end fetching std temp
@@ -154,12 +176,13 @@ function calc_fitness($chrom)
 }
 
 $ans = new chromo_typ();
+main();
 function main()
 {
     global $population, $ans, $population_sz, $arr_sch, $arr_pr, $arr_std_courses;
     $GENERATIONLIMIT = 50;
     $GENERATION = 1;
-    usort($population , "cmp") ; // depinding on fitness
+    usort($population, "cmp"); // depinding on fitness
     $ans = $population[0]; // consider that population[0] is the best answer initially
     while (true) {
         $new_popoulation = []; // temp population to save the offsprings
@@ -186,4 +209,121 @@ function main()
             }
         }
     }
+}
+
+// -----------------------------------------------
+/*
+in this section we are going to pick the courses which belong to same schedule id and period id
+and distrbute them in the most ideal way
+ */
+$arr_CoursesGroup = [];
+// grouping the courses depinding on the sch id-pr id
+foreach ($arr_sch as $cr) {
+    $schid = $ans->arr_SchId[$cr];
+    $prid = $ans->arr_PrId[$cr];
+    $index = (string) $schid . "_" . (string) $prid;
+    if (!isset($arr_CoursesGroup[$index])) {
+        $arr_CoursesGroup[$index] = [];
+    }
+    array_push($arr_CoursesGroup[$index], $cr);
+}
+
+foreach ($arr_CoursesGroup as $e) {
+    distrbute($e);
+}
+
+function CmpCoursesCap($id1, $id2)
+{
+    global $course_cap;
+    if ($course_cap[$id1] < $course_cap[$id2]) {
+        return 1;
+    } else {
+        return -1;
+    }
+}
+function CmpRoomsCap($id1, $id2)
+{
+    global $room_cap;
+    if ($room_cap[$id1] < $room_cap[$id2]) {
+        return 1;
+    } else {
+        return -1;
+    }
+
+}
+function distrbute($CoursesIds)
+{
+    global $courses_cnt, $course_cap, $arr_sch, $arr_rooms, $room_cap;
+    $RoomsCap = [];
+    $RoomsIds = [];
+    $CourseCap = [];
+    $Result = [];
+    foreach ($CoursesIds as $id) {
+        $CourseCap[$id] = $course_cap[$id];
+    }
+    foreach ($arr_rooms as $room_id) {
+        array_push($RoomsIds, $room_id);
+    }
+    foreach ($RoomsIds as $room_id) {
+        $RoomsCap[$room_id] = $room_cap[$room_id] ;
+    }
+    usort($RoomsIds, "CmpRoomsCap");
+    usort($CoursesIds, "CmpCoursesCap");
+
+    $i = 0;
+    $j = 0;
+    for (; $j < count($RoomsCap); $j++) {
+        $RoomId = $RoomsIds[$j];
+        if ($i >= count($CoursesIds)) {
+            $i = 0;
+        }
+        $CourseId1 = $CoursesIds[$i];
+        if( $CourseCap[$CourseId1] == 0 )break; 
+        $CourseId2 = -1;
+        if ($i + 1 < count($CoursesIds)) {
+            $CourseId2 = $CoursesIds[$i + 1];
+            $half1 = min((int) ((1 + $RoomsCap[$RoomId]) / 2), $CourseCap[$CourseId1]);
+            $half2 = min((int) ($RoomsCap[$RoomId] / 2), $CourseCap[$CourseId2]);
+            echo "room id = $RoomId , with Cap = $RoomsCap[$RoomId] got
+                  from Course$CourseId1 = $half1 , from Course$CourseId2 = $half2";
+            $RoomsCap[$RoomId] -= ($half1 + $half2);
+            $CourseCap[$CourseId1] -= $half1;
+            $CourseCap[$CourseId2] -= $half2;
+            echo ", new cap = $RoomsCap[$RoomId] </br>";
+            $i += 1 + ($half2 != 0);
+        } else {
+            $i++;
+            $half = min((int) ((1 + $RoomsCap[$RoomId]) / 2), $CourseCap[$CourseId1]);
+            echo "room id = $RoomId , with Cap = $RoomsCap[$RoomId] got from Course$CourseId1 = $half ";
+            $RoomsCap[$RoomId] -= $half;
+            $CourseCap[$CourseId1] -= $half;
+            echo ", new cap = $RoomsCap[$RoomId] </br>";
+        }
+    }
+    $i = 0;
+    shuffle( $CoursesIds ) ;
+    for ($j = 0; $j < count($RoomsCap); $j++) {
+        if( $i == count( $CoursesIds ) )break ;
+        $CourseId = $CoursesIds[$i];
+        $RoomId = $RoomsIds[$j];
+        if ($CourseCap[$CourseId] == 0) {
+            $i++;
+            continue;
+        }
+        if ($RoomsCap[$RoomId] == 0) {
+            continue;
+        }
+        $half = min($RoomsCap[$RoomId], $CourseCap[$CourseId]);
+        echo "ROOM id = $RoomId , with Cap = $RoomsCap[$RoomId] , got from Course$CourseId = $half
+              , old course = $CourseCap[$CourseId]</br>" ;
+        $RoomsCap[$RoomId] -= $half;
+        $CourseCap[$CourseId] -= $half;
+        if ($CourseCap[$CourseId] == 0) {
+            $i++;
+        }
+    }
+    if( $i != count( $CoursesIds ) ){
+        echo "what's happen now buddy!!" ;
+    }
+    echo "</br>-----------------------------------------</br>";
 }
