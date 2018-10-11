@@ -9,7 +9,7 @@ $idx_period = 3;
 $idx_std_courses = 4;
 $idx_std = 5;
 // prepare data
-$sql_courses = "SELECT * from s_course ORDER BY course_cp ASC";
+$sql_courses = "SELECT * from s_course where id < 5 ORDER BY course_cp ASC";
 $sql_rooms = "SELECT * from exams_rooms ORDER BY capacity DESC";
 $sql_schedual = "SELECT * from exams_schedual";
 $sql_period = "SELECT * from exam_periods";
@@ -21,6 +21,7 @@ $mutation_prob = mt_rand() / mt_getrandmax(); // used in GA Mutation function
 // used in implementation , here just declaring for clarity
 $query_arr = [];
 $course_schid = [];
+$courses_ids = [];
 $arr_std_courses = [];
 $arr_pr = [];
 $arr_sch = [];
@@ -82,6 +83,7 @@ while ($row = mysqli_fetch_assoc($rooms)) {
 // mapping course's id to it's capacity
 while ($row = mysqli_fetch_assoc($courses)) {
     $course_cap[$row["id"]] = $row["course_cp"];
+    array_push($courses_ids, $row["id"]);
 }
 
 mysqli_data_seek($courses, 0);
@@ -101,7 +103,7 @@ $population_sz = 10;
 for ($temp = 1; $temp <= 10; $temp++) {
     $chrom = new chromo_typ();
     // give each course a period id and schedual id
-    foreach ($arr_sch as $i) {
+    foreach ($courses_ids as $i) {
         $sch_id = $arr_sch[rand(0, $sch_cnt - 1)]; // random from periods IDs array
         $pr_id = $arr_pr[rand(0, $periods_cnt - 1)]; // random from scheduals IDs array
         $chrom->arr_SchId[$i] = $sch_id;
@@ -155,6 +157,10 @@ function calc_fitness($chrom)
     while ($row = mysqli_fetch_assoc($query_std_temp)) {
         $std_id = $row["id"];
         $conflict = 0;
+        if (!isset($arr_std_courses[$std_id])) {
+            continue;
+        }
+
         $arr_curstd_courses = $arr_std_courses[$std_id]; // array contain the current stdudent courses
         $arr_counting_temp = []; // counting conflicts
         $arr_ComputingSum = []; // Comute total sum of courses capacity grouped in the same day to avoide overflow
@@ -173,7 +179,6 @@ function calc_fitness($chrom)
             if (!isset($arr_ComputingSum[$index])) {
                 $arr_ComputingSum[$index] = 0;
             }
-
             $arr_counting_temp[$index] += 1;
             $arr_ComputingSum[$index] += $course_cap[$e];
             // more than course in the same time !! increase conflicts counter
@@ -184,7 +189,6 @@ function calc_fitness($chrom)
             if ($arr_ComputingSum[$index] > $RoomsCapSum) {
                 return -100000;
             }
-
         }
         $fitness -= $conflict;
     } // end fetching std temp
@@ -193,6 +197,13 @@ function calc_fitness($chrom)
 
 $ans = new chromo_typ();
 main();
+
+foreach ($courses_ids as $cr_id) {
+    echo "course id = $cr_id , sch id = "
+    . $ans->arr_SchId[$cr_id] . " pr id = " . $ans->arr_PrId[$cr_id] . "</br>";
+}
+
+echo "ans fitness = " . $ans->fitness . "</br>";
 function main()
 {
     global $population, $ans, $population_sz, $arr_sch, $arr_pr, $arr_std_courses;
@@ -234,7 +245,7 @@ and distrbute them in the most ideal way
  */
 $arr_CoursesGroup = [];
 // grouping the courses depinding on the sch id-pr id
-foreach ($arr_sch as $cr) {
+foreach ($courses_ids as $cr) {
     $schid = $ans->arr_SchId[$cr];
     $prid = $ans->arr_PrId[$cr];
     $index = (string) $schid . "_" . (string) $prid;
@@ -245,7 +256,9 @@ foreach ($arr_sch as $cr) {
 }
 
 foreach ($arr_CoursesGroup as $e) {
-    distrbute($e);
+    print_r($e) ;
+    echo "</br>" ;
+    distribute($e);
 }
 // comparision function , dont care about them !!
 function CmpCoursesCap($id1, $id2)
@@ -265,7 +278,6 @@ function CmpRoomsCap($id1, $id2)
     } else {
         return -1;
     }
-
 }
 // distrbute each group of courses on the rooms
 function distribute($CoursesIds)
@@ -284,13 +296,13 @@ function distribute($CoursesIds)
     foreach ($RoomsIds as $room_id) {
         $RoomsCap[$room_id] = $room_cap[$room_id];
     }
-    // sort them DESC
+// sort them DESC
     usort($RoomsIds, "CmpRoomsCap");
     usort($CoursesIds, "CmpCoursesCap");
 
     $i = 0;
     $j = 0;
-    // divide each room in two halfs then put a course in each part
+// divide each room in two halfs then put a course in each part
     for (; $j < count($RoomsCap); $j++) {
         $RoomId = $RoomsIds[$j];
         if ($i >= count($CoursesIds)) {
@@ -302,15 +314,15 @@ function distribute($CoursesIds)
         }
 
         $CourseId2 = -1;
-        // two courses left !!
+// two courses left !!
         if ($i + 1 < count($CoursesIds)) {
             $CourseId2 = $CoursesIds[$i + 1];
-            // put a course in each half
+// put a course in each half
             $half1 = min((int) ((1 + $RoomsCap[$RoomId]) / 2), $CourseCap[$CourseId1]);
             $half2 = min((int) ($RoomsCap[$RoomId] / 2), $CourseCap[$CourseId2]);
             echo "room id = $RoomId , with Cap = $RoomsCap[$RoomId] got
-                  from Course$CourseId1 = $half1 , from Course$CourseId2 = $half2";
-            // subtract the result from the capacities and room size
+from Course$CourseId1 = $half1 , from Course$CourseId2 = $half2";
+// subtract the result from the capacities and room size
             $RoomsCap[$RoomId] -= ($half1 + $half2);
             $CourseCap[$CourseId1] -= $half1;
             $CourseCap[$CourseId2] -= $half2;
@@ -318,7 +330,7 @@ function distribute($CoursesIds)
             $i += 1 + ($half2 != 0);
         } else { // just one course left !!
             $i++;
-            // min between size of the room divided by two, and course capacity
+// min between size of the room divided by two, and course capacity
             $half = min((int) ((1 + $RoomsCap[$RoomId]) / 2), $CourseCap[$CourseId1]);
             echo "room id = $RoomId , with Cap = $RoomsCap[$RoomId] got from Course$CourseId1 = $half ";
             $RoomsCap[$RoomId] -= $half;
@@ -327,7 +339,7 @@ function distribute($CoursesIds)
         }
     }
     $i = 0;
-    // any student left !! so shuffle them and and randomly distribute them
+// any student left !! so shuffle them and and randomly distribute them
     shuffle($CoursesIds);
     for ($j = 0; $j < count($RoomsCap); $j++) {
         if ($i == count($CoursesIds)) {
@@ -345,7 +357,7 @@ function distribute($CoursesIds)
         }
         $half = min($RoomsCap[$RoomId], $CourseCap[$CourseId]);
         echo "ROOM id = $RoomId , with Cap = $RoomsCap[$RoomId] , got from Course$CourseId = $half
-              , old course = $CourseCap[$CourseId]</br>";
+, old course = $CourseCap[$CourseId]</br>";
         $RoomsCap[$RoomId] -= $half;
         $CourseCap[$CourseId] -= $half;
         if ($CourseCap[$CourseId] == 0) {
