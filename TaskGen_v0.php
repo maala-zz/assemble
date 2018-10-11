@@ -9,7 +9,7 @@ $idx_period = 3;
 $idx_std_courses = 4;
 $idx_std = 5;
 // prepare data
-$sql_courses = "SELECT * from s_course where id < 5 ORDER BY course_cp ASC";
+$sql_courses = "SELECT * from s_course ORDER BY course_cp ASC";
 $sql_rooms = "SELECT * from exams_rooms ORDER BY capacity DESC";
 $sql_schedual = "SELECT * from exams_schedual";
 $sql_period = "SELECT * from exam_periods";
@@ -44,7 +44,6 @@ while ($row = mysqli_fetch_assoc($query_std_courses_temp)) {
     if (!isset($arr_std_courses[$std_id])) {
         $arr_std_courses[$std_id] = [];
     }
-
     array_push($arr_std_courses[$std_id], $cr_id);
 }
 
@@ -116,9 +115,9 @@ for ($temp = 1; $temp <= 10; $temp++) {
 // parameters : two chromosomes , return value :  chromosome which is the result of crossover
 function CrossOver($chrom1, $chrom2)
 {
-    global $arr_sch;
+    global $arr_sch , $courses_ids ;
     global $courses_cnt, $cross_prob;
-    foreach ($arr_sch as $i) {
+    foreach ($courses_ids as $i) {
         $r = mt_rand() / mt_getrandmax();
         // swap depinding on cross prob
         if ($r <= $cross_prob) {
@@ -134,12 +133,16 @@ returned value : NONE
  */
 function Mutation(&$chrom)
 {
-    global $population, $courses_cnt, $arr_sch, $arr_pr, $sch_cnt, $periods_cnt, $mutation_prob;
+    global $population , $arr_sch, $arr_pr, $mutation_prob , $courses_ids ;
     global $population_sz;
+    $courses_cnt = count( $courses_ids ) ;
+    $periods_cnt = count( $arr_pr ) ;
+    $sch_cnt = count( $arr_sch ) ;
     // pick random course number, scheduale id and period id then mutate the course
-    $course_num = rand(1, $courses_cnt);
-    $sch_rand = rand(0, $sch_cnt - 1);
-    $pr_rand = rand(0, $periods_cnt - 1);
+    $course_num = $courses_ids[rand(0 , $courses_cnt - 1)] ;
+    $sch_rand = $arr_sch[ rand(0, $sch_cnt - 1) ] ;
+    $pr_rand = $arr_pr[ rand(0, $periods_cnt - 1) ] ;
+
     $r = mt_rand() / mt_getrandmax();
     if ($r <= $mutation_prob) {
         $chrom->arr_SchId[$course_num] = $arr_sch[$sch_rand];
@@ -256,8 +259,8 @@ foreach ($courses_ids as $cr) {
 }
 
 foreach ($arr_CoursesGroup as $e) {
-    print_r($e) ;
-    echo "</br>" ;
+    print_r($e);
+    echo "</br>";
     distribute($e);
 }
 // comparision function , dont care about them !!
